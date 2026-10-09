@@ -92,12 +92,27 @@ Control-point bounds are validated before subdivision.
 Curves are flattened by recursive subdivision. A quadratic piece is flat when
 its control point lies within 0.25 px of the chord's midpoint (a curve error of
 about 0.125 px); a cubic piece when both control points lie within 1/6 px of the
-chord's thirds. A curve that needs more than 12 levels returns an error. Each
-pixel row is sampled at
-four y positions; for each, the crossings of the half-open edge intervals are
-collected and sorted, and a sweep across four x samples per pixel accumulates
-winding (non-zero) or parity (even-odd). Sixteen samples per pixel give the
-coverage, rounded to 0–255.
+chord's thirds. A curve that needs more than 12 levels returns an error.
+
+Coverage is computed in mask-local pixels, `x' = x - left` and
+`y' = y - top`, y down, inside `[0, width] × [0, height]`. The accumulator is a
+local `Array<U32>` with `width + 1` slots per row, holding signed 16.16 fixed
+point in two's complement (one pixel of winding 1 is 65536); it never leaves
+the rasterizer, which builds `coverage` from it once.
+
+- `NonZero`: for every row an edge crosses, the piece inside the row (height
+  `dy`, x range `lo..hi`) adds to each cell the change of the area right of the
+  edge, so the row sums to `round(dy × 65536)` exactly. A running sum along the
+  row gives each pixel's signed winding area; coverage is
+  `round(255 × min(|area|, 1))`. Downward edges count +1, upward −1.
+- `EvenOdd`: four sub-scanlines per pixel row, at `y' = (k + 1/2) / 4`, cross
+  the active edges with half-open intervals `y0 <= y < y1`. Sorted crossings
+  pair into inside spans, and each span adds two vertical steps of height 1/4
+  at its exact x ends to the same accumulator, read back as above.
+
+Values are exact for straight edges when no pixel holds two same-direction
+overlapping contours (`NonZero`) and up to the four sub-scanlines along y
+(`EvenOdd`).
 
 ## Runtime boundary
 

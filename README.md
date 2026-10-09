@@ -23,21 +23,27 @@ the converter only re-encoded the pixels. The font is Liberation Sans.
 - Quadratic and cubic Bézier flattening, with a geometric chord-error target of
   about 0.125 px and at most 12 subdivision levels (F32 arithmetic, no proven
   error bound).
-- Scanline intersections with half-open y intervals, so shared vertices are not
-  counted twice; horizontal edges add no intersections.
-- `NonZero` and `EvenOdd` fill rules, multiple subpaths, holes, and overlaps.
-- 4×4 samples per pixel (centers at 1/8, 3/8, 5/8, 7/8), rounded to coverage
-  0–255. Coverage is independent of color.
+- Analytic area coverage for `NonZero`: every edge adds its exact signed area,
+  row by row, to a local accumulator (16.16 fixed point), and a running sum
+  along each row gives the coverage, rounded to 0–255. Coverage is
+  independent of color.
+- `EvenOdd` through scanline spans: four sub-scanlines per pixel row with
+  half-open y intervals (shared vertices are crossed once), sorted crossings
+  paired into inside spans that are exact along x.
+- Multiple subpaths, holes, and overlaps under both rules.
 - Glyph masks from Runika outlines at a physical pixel size, and positioned
   masks for a whole Syllo layout at a given device scale.
 - Paths use [Splina](https://github.com/amage-si/splina)'s shared types;
   quadratics from fonts stay quadratic until rasterization.
 
-Dithra's own suite has **15 checks**: analytic coverage of squares (255, 128,
-64), overlap under both fill rules, holes, quadratic and cubic coverage, open
-paths and paths without `MoveTo`, oversized masks and zero scale, a real space
-glyph, and a real accented glyph at 12 and 48 px. `all_tests.bend` runs the
-whole text chain, **83 checks**: 51 Runika, 17 Syllo, and 15 Dithra.
+Dithra's own suite has **22 checks**: analytic coverage of squares (255, 128,
+64), a 0.3 px strip, a diagonal half pixel, edges crossing four cells and four
+rows (both fill rules), overlap under both fill rules, holes from even-odd and
+from opposite contours, two windings inside one even-odd pixel, quadratic and
+cubic coverage, open paths and paths without `MoveTo`, oversized masks and
+zero scale, a real space glyph, and a real accented glyph at 12 and 48 px.
+`all_tests.bend` runs the whole text chain, **99 checks**: 58 Runika, 19
+Syllo, and 22 Dithra.
 
 Beyond the suites, the examples have been run on Linux: the text demo (ten
 blocks of Portuguese at 12–48 px), the integration with
@@ -126,8 +132,12 @@ scaling, and limits.
 
 - CPU only. No glyph cache or atlas: repeated characters are rasterized again.
 - Glyph origins are rounded down to whole pixels; there is no subpixel phase.
-- 4×4 supersampling, not exact analytic coverage. No LCD/subpixel rendering,
-  hinting, or gamma correction; final sRGB composition belongs to Chromi.
+- `NonZero` averages the winding inside a pixel before clamping it, like
+  FreeType and stb_truetype: exact unless one pixel holds two overlapping
+  contours of the same direction (windings 0 and 2 there read as full).
+  `EvenOdd` is exact along x but samples four rows per pixel along y. No
+  LCD/subpixel rendering, hinting, or gamma correction; final sRGB
+  composition belongs to Chromi.
 - Every subpath needs `MoveTo` and `ClosePath`; open paths are rejected.
   No strokes, vector clipping, or GPU tessellation.
 - Limits: 4096 path commands, 32768 edges after flattening, masks up to 1024 px
@@ -136,19 +146,21 @@ scaling, and limits.
   larger than its ink can be rejected. Exceeding a limit returns an error, never
   a partial mask.
 
-Cost per sample row: intersections O(E), sorting O(I log I), and the sweep
-O(4W + I), with four sample rows per pixel row. On the development machine
-(Ryzen 7 5800H, one core, `--threads 1`), the text demo took a median 0.63 s
-over three runs, including font loading, layout, rasterization of ten blocks,
-and writing the PGM, with a peak RSS of about 50 MiB. This is a single
-measurement on a shared machine, not a renderer benchmark, and no advantage
-over existing rasterizers is claimed. See [docs/notes.md](docs/notes.md).
+Cost: `NonZero` touches each edge once per pixel row it crosses and each
+cell it passes over, plus one pass over the W × H mask; `EvenOdd` adds, per
+sub-scanline, the active edges and an insertion sort of their crossings. On
+the development machine (Ryzen 7 5800H, one core, `--threads 1`),
+`examples/bench.bend` rasterizes the printable ASCII glyphs of Liberation Sans
+in a median 4.4 µs per glyph at 16 px and 19 µs at 64 px (`NonZero`), and
+15 µs at 16 px under `EvenOdd`; the 4×4 supersampler it replaced took 70 and
+755 µs. These are measurements on a shared machine, not a comparison with
+other rasterizers. See [docs/notes.md](docs/notes.md).
 
 ## Repository map
 
 | Path | Purpose |
 | --- | --- |
-| [raster.bend](raster.bend) | Path validation, flattening, scanline coverage, masks. |
+| [raster.bend](raster.bend) | Path validation, flattening, analytic and even-odd coverage, masks. |
 | [main.bend](main.bend) | Glyph masks from Runika and positioned masks for Syllo layouts. |
 | [tests.bend](tests.bend) | Dithra's native checks. |
 | [all_tests.bend](all_tests.bend) | Runika, Syllo, and Dithra checks in one binary. |
@@ -156,13 +168,15 @@ over existing rasterizers is claimed. See [docs/notes.md](docs/notes.md).
 | [examples/integration.bend](examples/integration.bend) | Syllo → Tessra → Dithra → Chromi, exported as PGM. |
 | [examples/window.bend](examples/window.bend) | The integration frame in an Ankra window. |
 | [examples/export.bend](examples/export.bend) | Grayscale test surface and PGM writer used by the examples. |
+| [examples/bench.bend](examples/bench.bend) | Rasterization timing over the ASCII glyphs at 16 and 64 px. |
 | [docs/api.md](docs/api.md) | Types, coordinate systems, and limits. |
 | [docs/notes.md](docs/notes.md) | Measurements and runtime findings. |
 
 ## Direction
 
-Next are a glyph cache keyed by font, size, and subpixel phase, active-edge
-buckets, and incremental composition, preserving the current contracts. These
+Next are a glyph cache keyed by font, size, and subpixel phase, rasterizing
+independent glyphs in parallel, and incremental composition, preserving the
+current contracts. These
 are goals, not supported features.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development rules. The API is

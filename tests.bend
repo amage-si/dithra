@@ -8,6 +8,16 @@ import ./main.bend as D
 def rectangle(+l: F32, +t: F32, +r: F32, +b: F32) -> List<&2, P.Segment>:
   [P.MoveTo{P.Point{l,t}}, P.Line{P.Point{r,t}}, P.Line{P.Point{r,b}}, P.Line{P.Point{l,b}}, P.ClosePath{}]
 
+def lines(ps: List<&2, P.Point>) -> List<&2, P.Segment>:
+  match ps:
+    case Nil{}: [P.ClosePath{}]
+    case Con{h, t}: Con{P.Line{h}, lines(t)}
+
+def polygon(ps: List<&2, P.Point>) -> List<&2, P.Segment>:
+  match ps:
+    case Nil{}: Nil{}
+    case Con{h, t}: Con{P.MoveTo{h}, lines(t)}
+
 def equal_bytes(a: List<&2, U32>, b: List<&2, U32>) -> Bool:
   match a b:
     case Nil{} Nil{}: True{}
@@ -47,9 +57,25 @@ def main() -> IO(Unit):
     full : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{rectangle(0.0,0.0,1.0,1.0), P.NonZero{}}, 1.0))
     C.expect(mask_bytes(full, [255]), "unit square fully covered; horizontal edges and shared vertices")
     half : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{rectangle(0.0,0.0,0.5,1.0), P.NonZero{}}, 1.0))
-    C.expect(mask_bytes(half, [128]), "half pixel equals 8 of 16 samples")
+    C.expect(mask_bytes(half, [128]), "half pixel: area 1/2 gives 128")
     quarter : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{rectangle(0.0,0.0,0.5,0.5), P.NonZero{}}, 1.0))
-    C.expect(mask_bytes(quarter, [64]), "quarter pixel equals 4 of 16 samples")
+    C.expect(mask_bytes(quarter, [64]), "quarter pixel: area 1/4 gives 64")
+    # Exact area, rounded half up: 0.3 * 255 = 76.5 (4x4 sampling gave 64).
+    strip : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{rectangle(0.0,0.0,0.3,1.0), P.NonZero{}}, 1.0))
+    C.expect(mask_bytes(strip, [77]), "0.3 pixel strip gives round(76.5) = 77")
+    # A diagonal halves the pixel: 127.5 rounds to 128 (4x4 sampling gave 96).
+    diagonal : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{polygon([P.Point{0.0,0.0},P.Point{1.0,0.0},P.Point{0.0,1.0}]), P.NonZero{}}, 1.0))
+    C.expect(mask_bytes(diagonal, [128]), "diagonal half pixel gives 128")
+    # One row, the edge crosses four cells: pixel j holds (7 - 2j)/8 of its
+    # area, 255 * [7,5,3,1]/8 = 223.1, 159.4, 95.6, 31.9. The even-odd spans
+    # reach the same values: the midpoint rule is exact for a straight edge.
+    shallow : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{polygon([P.Point{0.0,0.0},P.Point{4.0,0.0},P.Point{0.0,1.0}]), P.EvenOdd{}}, 1.0))
+    C.expect(mask_bytes(shallow, [223,159,96,32]), "even-odd spans: shallow edge across four cells")
+    wedge : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{polygon([P.Point{0.0,0.0},P.Point{4.0,0.0},P.Point{0.0,1.0}]), P.NonZero{}}, 1.0))
+    C.expect(mask_bytes(wedge, [223,159,96,32]), "non-zero area: shallow edge across four cells")
+    # One column, the edge crosses four rows: row r holds (2r + 1)/8.
+    steep : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{polygon([P.Point{0.0,0.0},P.Point{1.0,4.0},P.Point{0.0,4.0}]), P.NonZero{}}, 1.0))
+    C.expect(mask_bytes(steep, [32,96,159,223]), "steep edge across four rows: exact areas per row")
     +double : List<&2, P.Segment> = List.append(&2, P.Segment, rectangle(0.0,0.0,1.0,1.0), rectangle(0.0,0.0,1.0,1.0))
     nonzero : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{double,P.NonZero{}}, 0.0))
     parity : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{double,P.EvenOdd{}}, 0.0))
@@ -57,6 +83,14 @@ def main() -> IO(Unit):
     C.expect(mask_bytes(parity,[0]), "even-odd overlap cancels")
     hole : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{List.append(&2,P.Segment,rectangle(0.0,0.0,3.0,3.0), rectangle(1.0,1.0,2.0,2.0)),P.EvenOdd{}}, 0.0))
     C.expect(mask_bytes(hole,[255,255,255,255,0,255,255,255,255]), "subpath hole is preserved")
+    +inner : List<&2, P.Segment> = polygon([P.Point{1.0,1.0},P.Point{1.0,2.0},P.Point{2.0,2.0},P.Point{2.0,1.0}])
+    counter : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{List.append(&2,P.Segment,rectangle(0.0,0.0,3.0,3.0), inner),P.NonZero{}}, 0.0))
+    C.expect(mask_bytes(counter,[255,255,255,255,0,255,255,255,255]), "nonzero hole from an opposite contour")
+    # Two overlapping half-pixel strips: [0,0.5] has winding 1 and [0.25,0.75]
+    # adds one more. Even-odd keeps [0,0.25] and [0.5,0.75]: area 1/2. An
+    # averaged winding (mean 1) would read as full coverage here.
+    stripes : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{List.append(&2,P.Segment,rectangle(0.0,0.0,0.5,1.0), rectangle(0.25,0.0,0.75,1.0)),P.EvenOdd{}}, 0.0))
+    C.expect(mask_bytes(stripes,[128]), "even-odd inside one pixel with windings 1 and 2")
     +curve : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{[P.MoveTo{P.Point{0.0,4.0}},P.Quad{P.Point{2.0,0.0},P.Point{4.0,4.0}},P.ClosePath{}],P.NonZero{}}, 0.0))
     C.expect(Bool.and(well_formed(curve),partial(coverage(curve))), "quadratic antialiasing and buffer dimensions")
     cubic : R.Mask <- C.unwrap(R.Mask, R.rasterize_screen(P.Path{[P.MoveTo{P.Point{0.0,4.0}},P.Cubic{P.Point{0.0,0.0},P.Point{4.0,0.0},P.Point{4.0,4.0}},P.ClosePath{}],P.NonZero{}}, 0.0))

@@ -27,6 +27,34 @@ The window example opened a 640×160 XWayland window titled
 comes from the compositor's window list; it confirms the window, not its pixels.
 The exported PGM of the same frame was inspected visually.
 
+## Analytic coverage (2026-10-09)
+
+The 4×4 supersampler (lists of samples per sub-scanline, every edge tested on
+every sub-scanline, a closure per bind in the flattening and path walk) was
+replaced by analytic signed-area accumulation for `NonZero`, scanline spans
+for `EvenOdd`, and explicit folds that thread the edge list, count, bounds,
+and first error through the path walk.
+
+`examples/bench.bend`: the 94 printable ASCII glyphs of Liberation Sans,
+outlines parsed once, `R.rasterize` repeated. Pinned to one core with
+`taskset -c 3`, `--threads 1 --gpu off`; old and new binaries interleaved,
+3 runs × 3 batches each (9 batches), on a shared machine with load average
+about 5–6 from other sessions.
+
+| Glyphs | Before (median µs/glyph) | After (median µs/glyph) |
+| --- | --- | --- |
+| 16 px, `NonZero` | 70.5 (67.6–75.0) | 4.35 (4.18–4.67) |
+| 64 px, `NonZero` | 755 (734–822) | 18.7 (17.9–19.0) |
+| 16 px, `EvenOdd` | (same path as above) | 15.3 (15.0–16.5) |
+
+The text demo (`examples/text.bend`, font load, layout, rasterization, PGM)
+took 115 / 109 / 119 ms before and 68 / 66 / 71 ms after, same conditions.
+
+Coverage changes: the demo image differs from the 4×4 output in 22284 of
+548800 pixels, at most 60 levels, all on antialiased edges (mean ink 10.585
+before, 10.592 after). Even-odd and non-zero renderings of the same glyphs at
+120 px differ by at most 26 levels, on near-horizontal edges.
+
 ## Runtime findings
 
 - `bend examples/window.bend` without `-o` stops with
