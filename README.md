@@ -8,7 +8,7 @@ compositor such as Chromi can paint. The whole chain from font file to pixels,
 **TrueType file → Runika → Syllo → Dithra → masks**, runs in Bend 2, without a
 native font or graphics engine.
 
-**Status:** early Linux implementation, tested with **Bend 2.0.35**. It runs on
+**Status:** early Linux implementation, tested with **Bend 2.0.37**. It runs on
 the CPU and covers glyph text and filled shapes; it has no glyph cache or
 subpixel positioning yet.
 
